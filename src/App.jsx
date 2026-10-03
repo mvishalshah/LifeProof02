@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Routes, Route, Navigate, useLocation, useNavigate } from "react-router-dom";
 import {
-  Activity, BarChart3, BookOpen, CalendarDays, Check, ChevronRight,
+  Activity, BarChart3, Bell, BookOpen, CalendarDays, Check, ChevronRight,
   CircleUserRound, Clock3, FileBarChart, FileText, Flame, Heart, Home,
   ImagePlus, Lightbulb, ListChecks, LogOut, Menu, Plus, Search, Settings,
   Share2, Sparkles, Target, Trash2, TrendingUp, X, Zap
@@ -70,6 +70,23 @@ function countCalendarWeeks(startValue, endValue) {
     weeks.add(isoDate(monday));
   }
   return weeks.size;
+}
+
+function decodeVapidKey(key) {
+  const paddedKey=`${key}${"=".repeat((4-key.length%4)%4)}`;
+  const base64=paddedKey.replace(/-/g,"+").replace(/_/g,"/");
+  const raw=atob(base64);
+  return Uint8Array.from(raw,char=>char.charCodeAt(0));
+}
+
+function searchScore(query, values) {
+  const terms = query.toLocaleLowerCase().trim().split(/\s+/).filter(Boolean);
+  if (!terms.length) return 0;
+  const words = values.join(" ").toLocaleLowerCase().split(/[^a-z0-9]+/).filter(Boolean);
+  const matches = terms.filter(term => words.some(word => word.includes(term)));
+  return matches.length === terms.length
+    ? matches.reduce((score, term) => score + (words.some(word => word.startsWith(term)) ? 2 : 1), 0)
+    : 0;
 }
 
 async function loadUserData(userId) {
@@ -236,7 +253,7 @@ function AuthenticatedApp({ session }) {
       <div className="main-shell">
         <header className="topbar">
           <button className="icon-btn mobile-only" onClick={()=>setMobileNav(true)}><Menu/></button>
-          <div className="top-search"><Search size={17}/><input placeholder="Search your journey…" /></div>
+          <GlobalSearch data={data}/>
           <div className="top-actions">
             <span className="date-chip"><CalendarDays size={15}/> {new Date().toLocaleDateString(undefined,{month:"short",day:"numeric"})}</span>
             {data.profile?.avatar_url
@@ -259,6 +276,52 @@ function AuthenticatedApp({ session }) {
       </div>
     </div>
   );
+}
+
+function GlobalSearch({data}) {
+  const navigate=useNavigate();
+  const [query,setQuery]=useState("");
+  const search=query.trim();
+  const memories=data.memories.map(memory=>({
+    type:"Memory",
+    title:memory.title,
+    detail:[memory.category,formatDate(memory.memory_date),memory.description].filter(Boolean).join(" · "),
+    target:`/timeline?q=${encodeURIComponent(memory.title)}`,
+    score:searchScore(search,[memory.title,memory.description||"",memory.category,(memory.tags||[]).join(" ")])
+  })).filter(result=>result.score).sort((a,b)=>b.score-a.score).slice(0,5);
+  const habits=data.habits.map(habit=>({
+    type:"Habit",
+    title:habit.name,
+    detail:[habit.frequency,habit.description].filter(Boolean).join(" · "),
+    target:`/habits?q=${encodeURIComponent(habit.name)}`,
+    score:searchScore(search,[habit.name,habit.description||"",habit.frequency])
+  })).filter(result=>result.score).sort((a,b)=>b.score-a.score).slice(0,5);
+  const results=[...memories,...habits];
+
+  function openResult(target) {
+    navigate(target);
+    setQuery("");
+  }
+
+  return <div className="global-search">
+    <div className="top-search"><Search size={17}/><input
+      value={query}
+      onChange={event=>setQuery(event.target.value)}
+      onKeyDown={event=>{if(event.key==="Escape")setQuery("");if(event.key==="Enter"&&results[0])openResult(results[0].target)}}
+      placeholder="Search habits and memories…"
+      aria-label="Search habits and memories"
+      aria-expanded={Boolean(search)}
+      aria-controls="global-search-results"
+    />{query&&<button className="search-clear" aria-label="Clear search" onClick={()=>setQuery("")}><X size={15}/></button>}</div>
+    {search&&<div className="search-results" id="global-search-results" role="listbox">
+      {results.length?<>
+        {memories.length>0&&<div className="search-group-label">MEMORIES</div>}
+        {memories.map((result,index)=><button key={`memory-${index}`} className="search-result" role="option" aria-selected="false" onClick={()=>openResult(result.target)}><span className="search-result-icon"><BookOpen size={16}/></span><span className="search-result-copy"><strong>{result.title}</strong><small>{result.detail}</small></span></button>)}
+        {habits.length>0&&<div className="search-group-label">HABITS</div>}
+        {habits.map((result,index)=><button key={`habit-${index}`} className="search-result" role="option" aria-selected="false" onClick={()=>openResult(result.target)}><span className="search-result-icon"><ListChecks size={16}/></span><span className="search-result-copy"><strong>{result.title}</strong><small>{result.detail}</small></span></button>)}
+      </>:<div className="search-empty">No habits or memories match “{search}”.</div>}
+    </div>}
+  </div>;
 }
 
 function Sidebar({ page, mobile, close, signOut, shareWebsite }) {
@@ -295,13 +358,16 @@ function PageHeader({eyebrow,title,description,action}) {
 
 function Dashboard({data}) {
   const { memories, habits, logs } = data;
+  const hour = new Date().getHours();
+  const greeting = hour < 12 ? "morning" : hour < 17 ? "afternoon" : "evening";
+  const bedtimeReminder = hour >= 22;
   const today = isoDate(new Date());
   const completedToday = logs.filter(l=>l.log_date===today && l.completed).length;
   const completion = habits.length ? Math.round((completedToday/habits.length)*100) : 0;
   const streak = calculateOverallStreak(habits, logs);
   const recent = memories.slice(0,4);
   return <>
-    <PageHeader eyebrow="YOUR JOURNEY" title={`Good ${new Date().getHours()<12?"morning":new Date().getHours()<18?"afternoon":"evening"}${data.profile?.full_name?`, ${data.profile.full_name.split(" ")[0]}`:""}.`} description="Here’s a clear view of where your life is moving." action={<QuickAdd/>}/>
+    <PageHeader eyebrow="YOUR JOURNEY" title={`Good ${greeting}${data.profile?.full_name?`, ${data.profile.full_name.split(" ")[0]}`:""}.`} description={bedtimeReminder?"It’s getting late. Consider winding down for bed after 10 PM to support healthy sleep.":"Here’s a clear view of where your life is moving."} action={<QuickAdd/>}/>
     <div className="stat-grid">
       <Stat icon={BookOpen} label="Memories" value={memories.length} hint="moments captured"/>
       <Stat icon={Flame} label="Current streak" value={`${streak}d`} hint="overall habit streak"/>
@@ -336,10 +402,12 @@ function LinkButton({to}) {
 }
 
 function Timeline({data,userId,refresh}) {
+  const location=useLocation();
   const [open,setOpen]=useState(false);
   const [editing,setEditing]=useState(null);
-  const [query,setQuery]=useState("");
+  const [query,setQuery]=useState(()=>new URLSearchParams(location.search).get("q")||"");
   const [category,setCategory]=useState("All");
+  useEffect(()=>{setQuery(new URLSearchParams(location.search).get("q")||"");},[location.search]);
   const filtered=data.memories.filter(m=>{
     const text=`${m.title} ${m.description||""} ${(m.tags||[]).join(" ")}`.toLowerCase();
     return text.includes(query.toLowerCase()) && (category==="All"||m.category===category);
@@ -385,10 +453,48 @@ function MemoryModal({initial,userId,close,refresh}) {
 }
 
 function Habits({data,userId,refresh}) {
+  const location=useLocation();
   const [open,setOpen]=useState(false);
   const [editing,setEditing]=useState(null);
+  const [query,setQuery]=useState(()=>new URLSearchParams(location.search).get("q")||"");
+  const [pushBusy,setPushBusy]=useState(false);
+  const [pushMessage,setPushMessage]=useState("");
+  useEffect(()=>{setQuery(new URLSearchParams(location.search).get("q")||"");},[location.search]);
   const today=isoDate(new Date());
   const completedToday=data.logs.filter(l=>l.log_date===today&&l.completed).map(l=>l.habit_id);
+  const filteredHabits=data.habits.filter(habit=>!query.trim()||searchScore(query,[habit.name,habit.description||"",habit.frequency])>0);
+  async function enablePushReminders() {
+    setPushBusy(true);
+    setPushMessage("");
+    try {
+      const vapidPublicKey=import.meta.env.VITE_VAPID_PUBLIC_KEY;
+      if(!vapidPublicKey) throw new Error("Push reminders are not configured yet. Add VITE_VAPID_PUBLIC_KEY and restart the app.");
+      if(!("serviceWorker" in navigator)||!("PushManager" in window)) throw new Error("This browser does not support push notifications.");
+      const permission=await Notification.requestPermission();
+      if(permission!=="granted") throw new Error("Allow notifications for this site in your browser to enable reminders.");
+      await navigator.serviceWorker.register("/sw.js");
+      const readyRegistration=await navigator.serviceWorker.ready;
+      const existing=await readyRegistration.pushManager.getSubscription();
+      const subscription=existing||await readyRegistration.pushManager.subscribe({
+        userVisibleOnly:true,
+        applicationServerKey:decodeVapidKey(vapidPublicKey)
+      });
+      const {error}=await supabase.from("habit_push_subscriptions").upsert({
+        user_id:userId,
+        endpoint:subscription.endpoint,
+        subscription:subscription.toJSON()
+      },{onConflict:"endpoint"});
+      if(error) {
+        if(!existing) await subscription.unsubscribe();
+        throw error;
+      }
+      setPushMessage("Push reminders are enabled on this device.");
+    } catch(error) {
+      setPushMessage(error?.message||"Could not enable push reminders.");
+    } finally {
+      setPushBusy(false);
+    }
+  }
   async function toggle(habit) {
     const done=completedToday.includes(habit.id);
     if(done) await supabase.from("habit_logs").delete().eq("habit_id",habit.id).eq("log_date",today);
@@ -398,23 +504,36 @@ function Habits({data,userId,refresh}) {
   return <>
     <PageHeader eyebrow="HABIT TRACKER" title="Small actions become visible progress." description="Keep the promises you make to yourself, one day at a time." action={<button className="primary" onClick={()=>{setEditing(null);setOpen(true)}}><Plus size={17}/> New habit</button>}/>
     <div className="habit-summary"><Stat icon={Flame} label="Overall streak" value={`${calculateOverallStreak(data.habits,data.logs)} days`} hint="based on tracked activity"/><Stat icon={Check} label="Today" value={`${completedToday.length}/${data.habits.length}`} hint="habits completed"/><Stat icon={Target} label="This month" value={`${monthlyCompletion(data.habits,data.logs)}%`} hint="completion rate"/></div>
-    <section className="panel"><div className="panel-head"><div><h3>Today's habits</h3><p>Tap a habit when you've completed it.</p></div></div>{data.habits.length?<div className="habit-list">{data.habits.map(h=><HabitCheck key={h.id} habit={h} completed={completedToday.includes(h.id)} onToggle={()=>toggle(h)} edit={()=>{setEditing(h);setOpen(true)}} refresh={refresh}/>)}</div>:<EmptyState icon={ListChecks} title="Build your first habit" text="Start with something small and repeatable."/>}</section>
+    <section className="panel"><div className="panel-head"><div><h3>Today's habits</h3><p>Tap a habit when you've completed it.</p></div><button className="secondary" type="button" onClick={enablePushReminders} disabled={pushBusy}><Bell size={16}/>{pushBusy?"Enabling…":"Enable reminders"}</button></div>{pushMessage&&<div className="notice push-notice" role="status">{pushMessage}</div>}<div className="search-field habit-search"><Search size={17}/><input value={query} onChange={e=>setQuery(e.target.value)} placeholder="Filter habits…"/></div>{filteredHabits.length?<div className="habit-list">{filteredHabits.map(h=><HabitCheck key={h.id} habit={h} completed={completedToday.includes(h.id)} onToggle={()=>toggle(h)} edit={()=>{setEditing(h);setOpen(true)}} refresh={refresh}/>)}</div>:<EmptyState icon={ListChecks} title={data.habits.length?"No habits match":"Build your first habit"} text={data.habits.length?"Try a shorter or different keyword.":"Start with something small and repeatable."}/>}</section>
     {open&&<HabitModal initial={editing} userId={userId} close={()=>setOpen(false)} refresh={refresh}/>}
   </>;
 }
 
 function HabitCheck({habit,completed,onToggle,edit,refresh,readonly}) {
   const streak=calculateHabitStreak(habit.id, []);
-  return <div className={`habit-row ${completed?"done":""}`}><button className="check-btn" onClick={onToggle} disabled={readonly}>{completed&&<Check size={17}/>}</button><div className="habit-info"><strong>{habit.name}</strong><span>{habit.description||`${habit.frequency} habit`}</span></div><div className="habit-meta"><span className="streak"><Flame size={14}/> {streak||0}</span>{!readonly&&<button className="icon-btn" onClick={edit}><Settings size={15}/></button>}</div></div>;
+  const weekdays=["","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
+  const reminder=habit.reminder_time
+    ? `Reminder ${habit.reminder_time.slice(0,5)}${habit.frequency==="weekly"&&habit.reminder_weekday?` · ${weekdays[habit.reminder_weekday]}`:""}`
+    : "";
+  const detail=[habit.description||`${habit.frequency} habit`,reminder].filter(Boolean).join(" · ");
+  return <div className={`habit-row ${completed?"done":""}`}><button className="check-btn" onClick={onToggle} disabled={readonly}>{completed&&<Check size={17}/>}</button><div className="habit-info"><strong>{habit.name}</strong><span>{detail}</span></div><div className="habit-meta"><span className="streak"><Flame size={14}/> {streak||0}</span>{!readonly&&<button className="icon-btn" onClick={edit}><Settings size={15}/></button>}</div></div>;
 }
 
 function HabitModal({initial,userId,close,refresh}) {
-  const [form,setForm]=useState({name:initial?.name||"",description:initial?.description||"",frequency:initial?.frequency||"daily"});
+  const [form,setForm]=useState({name:initial?.name||"",description:initial?.description||"",frequency:initial?.frequency||"daily",reminder_time:initial?.reminder_time?.slice(0,5)||"",reminder_weekday:String(initial?.reminder_weekday||1)});
   const [busy,setBusy]=useState(false);
   async function save(e) {
     e.preventDefault();setBusy(true);
     try {
-      const payload={name:form.name,description:form.description,frequency:form.frequency,user_id:userId};
+      const payload={
+        name:form.name,
+        description:form.description,
+        frequency:form.frequency,
+        reminder_time:form.reminder_time||null,
+        reminder_timezone:Intl.DateTimeFormat().resolvedOptions().timeZone||"UTC",
+        reminder_weekday:form.frequency==="weekly"&&form.reminder_time?Number(form.reminder_weekday):null,
+        user_id:userId
+      };
       const req=initial?supabase.from("habits").update(payload).eq("id",initial.id):supabase.from("habits").insert(payload);
       const {error}=await req;
       if(error) throw error;
@@ -427,7 +546,7 @@ function HabitModal({initial,userId,close,refresh}) {
     }
   }
   async function remove(){if(!initial||!confirm("Delete this habit and its logs?"))return;await supabase.from("habits").delete().eq("id",initial.id);close();refresh();}
-  return <Modal title={initial?"Edit habit":"Create a habit"} close={close}><form onSubmit={save} className="modal-form"><label>Habit name<input required value={form.name} onChange={e=>setForm({...form,name:e.target.value})} placeholder="Study for 45 minutes"/></label><label>Description<textarea rows="3" value={form.description} onChange={e=>setForm({...form,description:e.target.value})} placeholder="Why does this habit matter?"/></label><label>Frequency<select value={form.frequency} onChange={e=>setForm({...form,frequency:e.target.value})}><option value="daily">Daily</option><option value="weekly">Weekly</option></select></label><button className="primary full" disabled={busy}>{busy?"Saving…":initial?"Save changes":"Create habit"}</button>{initial&&<button type="button" className="danger-button full" onClick={remove}>Delete habit</button>}</form></Modal>;
+  return <Modal title={initial?"Edit habit":"Create a habit"} close={close}><form onSubmit={save} className="modal-form"><label>Habit name<input required value={form.name} onChange={e=>setForm({...form,name:e.target.value})} placeholder="Study for 45 minutes"/></label><label>Description<textarea rows="3" value={form.description} onChange={e=>setForm({...form,description:e.target.value})} placeholder="Why does this habit matter?"/></label><label>Frequency<select value={form.frequency} onChange={e=>setForm({...form,frequency:e.target.value})}><option value="daily">Daily</option><option value="weekly">Weekly</option></select></label><label>Reminder time <span className="field-hint">Optional · uses your local timezone</span><input type="time" value={form.reminder_time} onChange={e=>setForm({...form,reminder_time:e.target.value})}/></label>{form.frequency==="weekly"&&form.reminder_time&&<label>Remind me every<select value={form.reminder_weekday} onChange={e=>setForm({...form,reminder_weekday:e.target.value})}><option value="1">Monday</option><option value="2">Tuesday</option><option value="3">Wednesday</option><option value="4">Thursday</option><option value="5">Friday</option><option value="6">Saturday</option><option value="7">Sunday</option></select></label>}<button className="primary full" disabled={busy}>{busy?"Saving…":initial?"Save changes":"Create habit"}</button>{initial&&<button type="button" className="danger-button full" onClick={remove}>Delete habit</button>}</form></Modal>;
 }
 
 function Analytics({data}) {

@@ -76,8 +76,44 @@ create table if not exists public.habits (
   name text not null,
   description text,
   frequency text not null default 'daily' check (frequency in ('daily','weekly')),
+  reminder_time time,
+  reminder_timezone text not null default 'UTC',
+  reminder_weekday smallint check (reminder_weekday between 1 and 7),
   created_at timestamptz not null default now(),
   active boolean not null default true
+);
+
+alter table public.habits add column if not exists reminder_time time;
+alter table public.habits add column if not exists reminder_timezone text not null default 'UTC';
+alter table public.habits add column if not exists reminder_weekday smallint;
+
+do $$
+begin
+  if not exists (
+    select 1 from pg_constraint
+    where conname = 'habits_reminder_weekday_check'
+      and conrelid = 'public.habits'::regclass
+  ) then
+    alter table public.habits
+      add constraint habits_reminder_weekday_check
+      check (reminder_weekday is null or reminder_weekday between 1 and 7);
+  end if;
+end;
+$$;
+
+create table if not exists public.habit_push_subscriptions (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references auth.users(id) on delete cascade,
+  endpoint text not null unique,
+  subscription jsonb not null,
+  created_at timestamptz not null default now()
+);
+
+create table if not exists public.habit_reminder_deliveries (
+  habit_id uuid not null references public.habits(id) on delete cascade,
+  reminder_date date not null,
+  created_at timestamptz not null default now(),
+  primary key (habit_id, reminder_date)
 );
 
 create table if not exists public.habit_logs (
@@ -116,6 +152,8 @@ alter table public.memories enable row level security;
 alter table public.habits enable row level security;
 alter table public.habit_logs enable row level security;
 alter table public.habit_memory_links enable row level security;
+alter table public.habit_push_subscriptions enable row level security;
+alter table public.habit_reminder_deliveries enable row level security;
 
 drop policy if exists "profiles_select_own" on public.profiles;
 create policy "profiles_select_own" on public.profiles
@@ -143,6 +181,10 @@ for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
 
 drop policy if exists "links_own_all" on public.habit_memory_links;
 create policy "links_own_all" on public.habit_memory_links
+for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
+
+drop policy if exists "habit_push_subscriptions_own_all" on public.habit_push_subscriptions;
+create policy "habit_push_subscriptions_own_all" on public.habit_push_subscriptions
 for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
 
 create or replace function public.handle_new_user()

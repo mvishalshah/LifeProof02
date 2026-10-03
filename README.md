@@ -14,6 +14,7 @@ LifeProof is a personal evidence-and-growth dashboard based on the supplied CODE
 - Personal life timeline
 - Create/edit/delete memories
 - Habit creation and daily completion
+- Scheduled habit reminders via browser push notifications
 - Streak and completion calculations
 - Recharts analytics
 - Rule-based personal insights
@@ -42,6 +43,30 @@ npm run dev
 ```
 
 8. Open the local URL shown by Vite.
+
+## Habit push reminders
+
+Push reminders can arrive when the app is closed, but require HTTPS (localhost is allowed for development), browser notification permission, a deployed Supabase Edge Function, and Supabase Cron.
+
+1. Generate a VAPID key pair with `npx web-push generate-vapid-keys`.
+2. Add the public key as `VITE_VAPID_PUBLIC_KEY` in `.env`, then restart Vite. Add the same public key as a Vercel environment variable for production builds.
+3. Deploy the reminder function from the repository root using the Supabase CLI:
+
+   ```bash
+   supabase functions deploy send-habit-reminders --no-verify-jwt
+   ```
+
+4. Set Edge Function secrets. Use the generated VAPID keys, a `mailto:` subject, and one long random cron secret:
+
+   ```bash
+   supabase secrets set VAPID_PUBLIC_KEY=... VAPID_PRIVATE_KEY=... VAPID_SUBJECT=mailto:you@example.com REMINDER_CRON_SECRET=...
+   ```
+
+   Supabase provides `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` to the Edge Function. Never place the private VAPID key, cron secret, or service-role key in frontend environment variables.
+5. In Supabase SQL Editor, run `supabase/reminder-scheduler.sql` once after replacing the project URL and cron-secret placeholders. The cron secret must match `REMINDER_CRON_SECRET`.
+6. Run `supabase/schema.sql` if it has not already been run. In Habits, set a reminder time (and a weekday for weekly habits), then click **Enable reminders** and allow notifications.
+
+The scheduled job checks reminders once per minute. Daily habits notify every day; weekly habits notify only on their selected weekday. The saved time uses the browser's current timezone.
 
 ## GitHub safety
 
