@@ -2,9 +2,9 @@ import { useEffect, useMemo, useState } from "react";
 import { Routes, Route, Navigate, useLocation, useNavigate } from "react-router-dom";
 import {
   Activity, BarChart3, BookOpen, CalendarDays, Check, ChevronRight,
-  CircleUserRound, Clock3, FileText, Flame, Heart, Home, Lightbulb,
-  ListChecks, LogOut, Menu, Plus, Search, Settings, Sparkles, Target,
-  Trash2, TrendingUp, X, Zap
+  CircleUserRound, Clock3, FileBarChart, FileText, Flame, Heart, Home,
+  ImagePlus, Lightbulb, ListChecks, LogOut, Menu, Plus, Search, Settings,
+  Share2, Sparkles, Target, Trash2, TrendingUp, X, Zap
 } from "lucide-react";
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, LineChart, Line } from "recharts";
 import { supabase, supabaseConfigured } from "./lib/supabase";
@@ -34,6 +34,42 @@ function daysAgo(n) {
   const d = startOfDay();
   d.setDate(d.getDate() - n);
   return isoDate(d);
+}
+
+async function shareContent(title, text) {
+  if (navigator.share) {
+    await navigator.share({ title, text });
+    return;
+  }
+  if (!navigator.clipboard?.writeText) {
+    throw new Error("Sharing is unavailable in this browser. Open the site over HTTPS or use a supported browser.");
+  }
+  await navigator.clipboard.writeText(text);
+}
+
+function getReportPeriod(period) {
+  const end = startOfDay();
+  const start = new Date(end);
+  if (period === "week") {
+    const daysSinceMonday = (start.getDay() + 6) % 7;
+    start.setDate(start.getDate() - daysSinceMonday);
+  } else {
+    start.setDate(1);
+  }
+  const dayCount = Math.floor((end - start) / 86400000) + 1;
+  return { start: isoDate(start), end: isoDate(end), dayCount };
+}
+
+function countCalendarWeeks(startValue, endValue) {
+  const start = new Date(`${startValue}T00:00:00`);
+  const end = new Date(`${endValue}T00:00:00`);
+  const weeks = new Set();
+  for (const date = new Date(start); date <= end; date.setDate(date.getDate() + 1)) {
+    const monday = new Date(date);
+    monday.setDate(monday.getDate() - ((monday.getDay() + 6) % 7));
+    weeks.add(isoDate(monday));
+  }
+  return weeks.size;
 }
 
 async function loadUserData(userId) {
@@ -183,19 +219,29 @@ function AuthenticatedApp({ session }) {
   }
 
   const page = location.pathname.replace("/", "") || "dashboard";
+  async function shareWebsite() {
+    try {
+      await shareContent("LifeProof", `Track your habits and life journey with LifeProof: ${window.location.origin}`);
+      if (!navigator.share) alert("Website link copied to clipboard.");
+    } catch (error) {
+      if (error?.name !== "AbortError") alert(error?.message || "Could not share the website link.");
+    }
+  }
 
   if (loading) return <Splash/>;
 
   return (
     <div className="app-shell">
-      <Sidebar page={page} mobile={mobileNav} close={()=>setMobileNav(false)} signOut={signOut}/>
+      <Sidebar page={page} mobile={mobileNav} close={()=>setMobileNav(false)} signOut={signOut} shareWebsite={shareWebsite}/>
       <div className="main-shell">
         <header className="topbar">
           <button className="icon-btn mobile-only" onClick={()=>setMobileNav(true)}><Menu/></button>
           <div className="top-search"><Search size={17}/><input placeholder="Search your journey…" /></div>
           <div className="top-actions">
             <span className="date-chip"><CalendarDays size={15}/> {new Date().toLocaleDateString(undefined,{month:"short",day:"numeric"})}</span>
-            <div className="avatar">{(data.profile?.full_name || session.user.email || "U")[0].toUpperCase()}</div>
+            {data.profile?.avatar_url
+              ? <img className="avatar avatar-image" src={data.profile.avatar_url} alt="Profile"/>
+              : <div className="avatar">{(data.profile?.full_name || session.user.email || "U")[0].toUpperCase()}</div>}
           </div>
         </header>
         <main className="content">
@@ -205,6 +251,7 @@ function AuthenticatedApp({ session }) {
             <Route path="/habits" element={<Habits data={data} userId={session.user.id} refresh={refresh}/>}/>
             <Route path="/analytics" element={<Analytics data={data}/>}/>
             <Route path="/insights" element={<Insights data={data}/>}/>
+            <Route path="/reports" element={<Reports data={data}/>}/>
             <Route path="/profile" element={<Profile data={data} refresh={refresh} session={session}/>}/>
             <Route path="*" element={<Navigate to="/dashboard" replace/>}/>
           </Routes>
@@ -214,11 +261,11 @@ function AuthenticatedApp({ session }) {
   );
 }
 
-function Sidebar({ page, mobile, close, signOut }) {
+function Sidebar({ page, mobile, close, signOut, shareWebsite }) {
   const nav = [
     ["dashboard","Dashboard",Home], ["timeline","Timeline",CalendarDays],
     ["habits","Habits",ListChecks], ["analytics","Analytics",BarChart3],
-    ["insights","Insights",Lightbulb]
+    ["insights","Insights",Lightbulb], ["reports","Reports",FileBarChart]
   ];
   return (
     <>
@@ -229,6 +276,7 @@ function Sidebar({ page, mobile, close, signOut }) {
         <nav>{nav.map(([id,label,Icon])=><NavItem key={id} id={id} label={label} Icon={Icon} active={page===id} close={close}/>)}</nav>
         <div className="side-bottom">
           <NavItem id="profile" label="Profile" Icon={CircleUserRound} active={page==="profile"} close={close}/>
+          <button className="side-item" onClick={()=>{shareWebsite();close?.()}}><Share2 size={18}/><span>Share website</span></button>
           <button className="side-item" onClick={signOut}><LogOut size={18}/> Sign out</button>
         </div>
       </aside>
@@ -456,9 +504,117 @@ function monthlyCompletion(habits,logs){
 
 function Profile({data,refresh,session}){
   const [name,setName]=useState(data.profile?.full_name||"");
-  const [saved,setSaved]=useState(false);
-  async function save(){const {error}=await supabase.from("profiles").upsert({id:session.user.id,full_name:name});if(error)alert(error.message);else{setSaved(true);refresh();setTimeout(()=>setSaved(false),2000)}}
-  return <><PageHeader eyebrow="PROFILE" title="Your LifeProof profile." description="Keep your identity and journey space personal."/><section className="panel profile-panel"><div className="profile-avatar">{(name||session.user.email||"U")[0].toUpperCase()}</div><div className="profile-form"><label>Full name<input value={name} onChange={e=>setName(e.target.value)}/></label><label>Email<input value={session.user.email||""} disabled/></label><button className="primary" onClick={save}>{saved?"Saved ✓":"Save profile"}</button></div></section></>;
+  const [avatarUrl,setAvatarUrl]=useState(data.profile?.avatar_url||"");
+  const [file,setFile]=useState(null);
+  const [message,setMessage]=useState("");
+  const [busy,setBusy]=useState(false);
+  async function save(e){
+    e.preventDefault();
+    setBusy(true);setMessage("");
+    try {
+      let nextAvatarUrl=avatarUrl;
+      if(file){
+        if(!file.type.startsWith("image/")) throw new Error("Choose an image file.");
+        if(file.size>5*1024*1024) throw new Error("Choose an image smaller than 5 MB.");
+        const extension=file.name.split(".").pop()?.toLowerCase() || "jpg";
+        const path=`${session.user.id}/${crypto.randomUUID()}.${extension}`;
+        const {error:uploadError}=await supabase.storage.from("profile-photos").upload(path,file,{contentType:file.type,upsert:true});
+        if(uploadError) throw uploadError;
+        nextAvatarUrl=supabase.storage.from("profile-photos").getPublicUrl(path).data.publicUrl;
+      }
+      const {error}=await supabase.from("profiles").upsert({id:session.user.id,full_name:name,avatar_url:nextAvatarUrl});
+      if(error) throw error;
+      setAvatarUrl(nextAvatarUrl);
+      setFile(null);
+      setMessage("Profile saved.");
+      refresh();
+    } catch(error) {
+      setMessage(error?.message || "Could not save your profile.");
+    } finally {
+      setBusy(false);
+    }
+  }
+  return <>
+    <PageHeader eyebrow="PROFILE" title="Your LifeProof profile." description="Keep your identity and journey space personal."/>
+    <section className="panel profile-panel">
+      <div className="profile-photo-wrap">
+        {avatarUrl
+          ? <img className="profile-avatar profile-avatar-image" src={avatarUrl} alt="Your profile"/>
+          : <div className="profile-avatar">{(name||session.user.email||"U")[0].toUpperCase()}</div>}
+        <label className="secondary photo-picker"><ImagePlus size={16}/> Change photo<input type="file" accept="image/*" onChange={e=>setFile(e.target.files?.[0]||null)}/></label>
+        {file&&<span className="photo-filename">{file.name}</span>}
+      </div>
+      <form className="profile-form" onSubmit={save}>
+        <label>Full name<input value={name} onChange={e=>setName(e.target.value)} required/></label>
+        <label>Email<input value={session.user.email||""} disabled/></label>
+        {message&&<div className={message==="Profile saved."?"success-notice":"notice"} role="status">{message}</div>}
+        <button className="primary" disabled={busy}>{busy?"Saving…":"Save profile"}</button>
+      </form>
+    </section>
+  </>;
+}
+
+function Reports({data}) {
+  const [period,setPeriod]=useState("week");
+  const [message,setMessage]=useState("");
+  const range=getReportPeriod(period);
+  const periodLogs=data.logs.filter(log=>log.completed&&log.log_date>=range.start&&log.log_date<=range.end);
+  const periodMemories=data.memories.filter(memory=>memory.memory_date>=range.start&&memory.memory_date<=range.end);
+  const expected=data.habits.reduce((total,habit)=>total+(habit.frequency==="weekly"?countCalendarWeeks(range.start,range.end):range.dayCount),0);
+  const completionRate=expected?Math.min(100,Math.round(periodLogs.length/expected*100)):0;
+  const title=period==="week"?"Weekly report":"Monthly report";
+  const rangeLabel=`${formatDate(range.start)} – ${formatDate(range.end)}`;
+
+  async function shareReport(){
+    const habitSummary=data.habits.map(habit=>{
+      const count=periodLogs.filter(log=>log.habit_id===habit.id).length;
+      return `${habit.name}: ${count} check-in${count===1?"":"s"}`;
+    });
+    const report=[
+      `My LifeProof ${title.toLowerCase()} (${rangeLabel})`,
+      `Habit check-ins: ${periodLogs.length}`,
+      `Habit completion: ${completionRate}%`,
+      `Memories captured: ${periodMemories.length}`,
+      ...(habitSummary.length?["",...habitSummary]:[])
+    ].join("\n");
+    setMessage("");
+    try {
+      await shareContent(`LifeProof ${title}`,report);
+      if(!navigator.share) setMessage("Report copied to clipboard.");
+    } catch(error) {
+      if(error?.name!=="AbortError") setMessage(error?.message||"Could not share this report.");
+    }
+  }
+
+  return <>
+    <PageHeader eyebrow="YOUR PROGRESS" title="Reports for your journey." description="Review and share a summary of your habit schedule and memories." action={<button className="primary" onClick={shareReport}><Share2 size={17}/> Share report</button>}/>
+    <div className="report-controls">
+      <div className="period-switch" role="group" aria-label="Report period">
+        <button className={period==="week"?"selected":""} aria-pressed={period==="week"} onClick={()=>setPeriod("week")}>This week</button>
+        <button className={period==="month"?"selected":""} aria-pressed={period==="month"} onClick={()=>setPeriod("month")}>This month</button>
+      </div>
+      <span className="report-range">{rangeLabel}</span>
+    </div>
+    {message&&<div className="notice report-notice" role="status">{message}</div>}
+    <div className="stat-grid report-stats">
+      <Stat icon={Check} label="Habit check-ins" value={periodLogs.length} hint={`${data.habits.length} active habits`}/>
+      <Stat icon={TrendingUp} label="Schedule completion" value={`${completionRate}%`} hint="based on habit frequency"/>
+      <Stat icon={BookOpen} label="Memories captured" value={periodMemories.length} hint={period==="week"?"this week":"this month"}/>
+      <Stat icon={CalendarDays} label="Days in report" value={range.dayCount} hint="through today"/>
+    </div>
+    <section className="panel report-panel">
+      <div className="panel-head"><div><h3>Habit schedule</h3><p>Check-ins recorded during this report period</p></div></div>
+      {data.habits.length?<div className="report-habit-list">{data.habits.map(habit=>{
+        const count=periodLogs.filter(log=>log.habit_id===habit.id).length;
+        const target=habit.frequency==="weekly"?countCalendarWeeks(range.start,range.end):range.dayCount;
+        return <div className="report-habit" key={habit.id}><div><strong>{habit.name}</strong><span>{habit.frequency} · {habit.description||"No description"}</span></div><b>{count}/{target}</b></div>;
+      })}</div>:<EmptyState icon={ListChecks} title="No habits to report" text="Create a habit to start tracking your schedule." to="/habits"/>}
+    </section>
+    <section className="panel report-panel">
+      <div className="panel-head"><div><h3>Memories from this period</h3><p>Moments captured during {period==="week"?"this week":"this month"}</p></div></div>
+      {periodMemories.length?<div className="report-habit-list">{periodMemories.map(memory=><div className="report-habit" key={memory.id}><div><strong>{memory.title}</strong><span>{formatDate(memory.memory_date)} · {memory.category}</span></div></div>)}</div>:<p className="report-empty">No memories captured in this period.</p>}
+    </section>
+  </>;
 }
 
 function EmptyState({icon:Icon,title,text,to}){

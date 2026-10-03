@@ -8,6 +8,9 @@ LifeProof is a personal evidence-and-growth dashboard based on the supplied CODE
 
 - Supabase email/password authentication
 - Responsive dashboard
+- Editable profile with Supabase Storage photo uploads
+- Weekly and monthly habit/memory reports with sharing
+- Website share action in the navigation
 - Personal life timeline
 - Create/edit/delete memories
 - Habit creation and daily completion
@@ -27,7 +30,7 @@ React + Vite + Supabase/PostgreSQL + Recharts + Lucide React.
 
 1. Install Node.js 20+.
 2. Create a Supabase project.
-3. In Supabase SQL Editor, run `supabase/schema.sql`.
+3. In Supabase SQL Editor, run `supabase/schema.sql`. This also creates the public `profile-photos` Storage bucket and policies that restrict uploads/updates/deletes to each signed-in user's own folder. Profile photos are publicly viewable by URL.
 4. In Supabase Authentication, enable Email provider.
 5. Copy `.env.example` to `.env`.
 6. Fill in `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY`.

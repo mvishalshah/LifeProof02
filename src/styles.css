@@ -24,3 +24,28 @@ button,input,textarea,select{font:inherit}button{cursor:pointer}button:disabled{
 @media(max-width:430px){.stat-grid{grid-template-columns:1fr}.page-header h1{font-size:32px}.panel{padding:16px}.timeline-panel{padding:17px}.timeline-item{grid-template-columns:34px 1fr;gap:10px}.timeline-dot{width:31px;height:31px}.chart-panel{min-height:340px}.chart{height:250px}}
 
 code{color:#b9b0ff}input:disabled{opacity:.6;cursor:not-allowed}
+.avatar-image{object-fit:cover}
+.profile-photo-wrap{display:grid;justify-items:center;gap:10px;flex:none}
+.profile-avatar-image{object-fit:cover}
+.photo-picker{position:relative;cursor:pointer;white-space:nowrap}
+.photo-picker input{position:absolute;width:1px;height:1px;padding:0;opacity:0;overflow:hidden}
+.photo-filename{max-width:180px;color:var(--muted);font-size:11px;overflow-wrap:anywhere}
+.success-notice{padding:12px;border-radius:12px;background:#5eead412;border:1px solid #5eead430;color:#82f0d4;margin-bottom:15px;font-size:13px}
+.report-controls{display:flex;justify-content:space-between;align-items:center;gap:15px;margin-bottom:16px}
+.period-switch{display:flex;gap:5px;padding:4px;border:1px solid var(--line);border-radius:13px;background:#0a0f1b}
+.period-switch button{padding:8px 12px;border:0;border-radius:9px;background:transparent;color:var(--muted)}
+.period-switch button.selected{background:#8b7cff22;color:#fff}
+.report-range{color:var(--muted);font-size:12px}
+.report-notice{margin:0 0 16px}
+.report-stats{grid-template-columns:repeat(4,1fr)}
+.report-panel{margin-bottom:16px}
+.report-habit-list{display:grid}
+.report-habit{display:flex;justify-content:space-between;align-items:center;gap:15px;padding:14px 2px;border-bottom:1px solid var(--line)}
+.report-habit:last-child{border-bottom:0}
+.report-habit strong,.report-habit span{display:block}
+.report-habit strong{font-size:13px}
+.report-habit span,.report-habit b{font-size:11px;color:var(--muted);margin-top:4px}
+.report-habit b{color:#c4bcff;white-space:nowrap}
+.report-empty{color:var(--muted);font-size:13px}
+@media(max-width:760px){.report-stats{grid-template-columns:1fr 1fr}.report-controls{align-items:flex-start;flex-direction:column}}
+@media(max-width:430px){.report-stats{grid-template-columns:1fr}.period-switch{width:100%}.period-switch button{flex:1}}
