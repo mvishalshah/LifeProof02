@@ -201,8 +201,8 @@ function AuthenticatedApp({ session }) {
         <main className="content">
           <Routes>
             <Route path="/dashboard" element={<Dashboard data={data}/>}/>
-            <Route path="/timeline" element={<Timeline data={data} refresh={refresh}/>}/>
-            <Route path="/habits" element={<Habits data={data} refresh={refresh}/>}/>
+            <Route path="/timeline" element={<Timeline data={data} userId={session.user.id} refresh={refresh}/>}/>
+            <Route path="/habits" element={<Habits data={data} userId={session.user.id} refresh={refresh}/>}/>
             <Route path="/analytics" element={<Analytics data={data}/>}/>
             <Route path="/insights" element={<Insights data={data}/>}/>
             <Route path="/profile" element={<Profile data={data} refresh={refresh} session={session}/>}/>
@@ -287,7 +287,7 @@ function LinkButton({to}) {
   return <button className="link-button" onClick={()=>navigate(to)}>View all <ChevronRight size={15}/></button>;
 }
 
-function Timeline({data,refresh}) {
+function Timeline({data,userId,refresh}) {
   const [open,setOpen]=useState(false);
   const [editing,setEditing]=useState(null);
   const [query,setQuery]=useState("");
@@ -302,7 +302,7 @@ function Timeline({data,refresh}) {
     <section className="panel timeline-panel">
       {filtered.length ? filtered.map((m,i)=><MemoryCard key={m.id} memory={m} last={i===filtered.length-1} edit={()=>{setEditing(m);setOpen(true)}} refresh={refresh}/>) : <EmptyState icon={CalendarDays} title="Nothing here yet" text={query?"Try another search.":"Add a meaningful moment to begin your timeline."}/>}
     </section>
-    {open && <MemoryModal initial={editing} data={data} close={()=>setOpen(false)} refresh={refresh}/>}
+    {open && <MemoryModal initial={editing} userId={userId} close={()=>setOpen(false)} refresh={refresh}/>}
   </>;
 }
 
@@ -322,12 +322,12 @@ function MemoryRow({memory}) {
   return <div className="memory-row"><div className="memory-symbol">{memory.mood?.split(" ")[0]||"•"}</div><div><strong>{memory.title}</strong><span>{formatDate(memory.memory_date)} · {memory.category}</span></div></div>;
 }
 
-function MemoryModal({initial,data,close,refresh}) {
+function MemoryModal({initial,userId,close,refresh}) {
   const [form,setForm]=useState({title:initial?.title||"",description:initial?.description||"",memory_date:initial?.memory_date||isoDate(new Date()),category:initial?.category||"Personal",mood:initial?.mood||"😊 Great",tags:(initial?.tags||[]).join(", ")});
   const [busy,setBusy]=useState(false);
   async function save(e) {
     e.preventDefault(); setBusy(true);
-    const payload={title:form.title,description:form.description,memory_date:form.memory_date,category:form.category,mood:form.mood,tags:form.tags.split(",").map(x=>x.trim().replace(/^#/,"")).filter(Boolean),user_id:data.profile?.id};
+    const payload={title:form.title,description:form.description,memory_date:form.memory_date,category:form.category,mood:form.mood,tags:form.tags.split(",").map(x=>x.trim().replace(/^#/,"")).filter(Boolean),user_id:userId};
     const req=initial ? supabase.from("memories").update(payload).eq("id",initial.id) : supabase.from("memories").insert(payload);
     const {error}=await req;
     if(error) alert(error.message); else {close();refresh();}
@@ -336,7 +336,7 @@ function MemoryModal({initial,data,close,refresh}) {
   return <Modal title={initial?"Edit memory":"Capture a moment"} close={close}><form onSubmit={save} className="modal-form"><label>Title<input required value={form.title} onChange={e=>setForm({...form,title:e.target.value})} placeholder="What happened?"/></label><div className="two-col"><label>Date<input type="date" required value={form.memory_date} onChange={e=>setForm({...form,memory_date:e.target.value})}/></label><label>Category<select value={form.category} onChange={e=>setForm({...form,category:e.target.value})}>{CATEGORIES.map(c=><option key={c}>{c}</option>)}</select></label></div><label>How did it feel?<select value={form.mood} onChange={e=>setForm({...form,mood:e.target.value})}>{MOODS.map(m=><option key={m}>{m}</option>)}</select></label><label>Description<textarea rows="4" value={form.description} onChange={e=>setForm({...form,description:e.target.value})} placeholder="Add the context you'll want to remember…"/></label><label>Tags<input value={form.tags} onChange={e=>setForm({...form,tags:e.target.value})} placeholder="hackathon, learning, milestone"/></label><button className="primary full" disabled={busy}>{busy?"Saving…":initial?"Save changes":"Save memory"}</button></form></Modal>;
 }
 
-function Habits({data,refresh}) {
+function Habits({data,userId,refresh}) {
   const [open,setOpen]=useState(false);
   const [editing,setEditing]=useState(null);
   const today=isoDate(new Date());
@@ -344,14 +344,14 @@ function Habits({data,refresh}) {
   async function toggle(habit) {
     const done=completedToday.includes(habit.id);
     if(done) await supabase.from("habit_logs").delete().eq("habit_id",habit.id).eq("log_date",today);
-    else await supabase.from("habit_logs").upsert({habit_id:habit.id,user_id:data.profile.id,log_date:today,completed:true},{onConflict:"habit_id,log_date"});
+    else await supabase.from("habit_logs").upsert({habit_id:habit.id,user_id:userId,log_date:today,completed:true},{onConflict:"habit_id,log_date"});
     refresh();
   }
   return <>
     <PageHeader eyebrow="HABIT TRACKER" title="Small actions become visible progress." description="Keep the promises you make to yourself, one day at a time." action={<button className="primary" onClick={()=>{setEditing(null);setOpen(true)}}><Plus size={17}/> New habit</button>}/>
     <div className="habit-summary"><Stat icon={Flame} label="Overall streak" value={`${calculateOverallStreak(data.habits,data.logs)} days`} hint="based on tracked activity"/><Stat icon={Check} label="Today" value={`${completedToday.length}/${data.habits.length}`} hint="habits completed"/><Stat icon={Target} label="This month" value={`${monthlyCompletion(data.habits,data.logs)}%`} hint="completion rate"/></div>
     <section className="panel"><div className="panel-head"><div><h3>Today's habits</h3><p>Tap a habit when you've completed it.</p></div></div>{data.habits.length?<div className="habit-list">{data.habits.map(h=><HabitCheck key={h.id} habit={h} completed={completedToday.includes(h.id)} onToggle={()=>toggle(h)} edit={()=>{setEditing(h);setOpen(true)}} refresh={refresh}/>)}</div>:<EmptyState icon={ListChecks} title="Build your first habit" text="Start with something small and repeatable."/>}</section>
-    {open&&<HabitModal initial={editing} data={data} close={()=>setOpen(false)} refresh={refresh}/>}
+    {open&&<HabitModal initial={editing} userId={userId} close={()=>setOpen(false)} refresh={refresh}/>}
   </>;
 }
 
@@ -360,16 +360,23 @@ function HabitCheck({habit,completed,onToggle,edit,refresh,readonly}) {
   return <div className={`habit-row ${completed?"done":""}`}><button className="check-btn" onClick={onToggle} disabled={readonly}>{completed&&<Check size={17}/>}</button><div className="habit-info"><strong>{habit.name}</strong><span>{habit.description||`${habit.frequency} habit`}</span></div><div className="habit-meta"><span className="streak"><Flame size={14}/> {streak||0}</span>{!readonly&&<button className="icon-btn" onClick={edit}><Settings size={15}/></button>}</div></div>;
 }
 
-function HabitModal({initial,data,close,refresh}) {
+function HabitModal({initial,userId,close,refresh}) {
   const [form,setForm]=useState({name:initial?.name||"",description:initial?.description||"",frequency:initial?.frequency||"daily"});
   const [busy,setBusy]=useState(false);
   async function save(e) {
     e.preventDefault();setBusy(true);
-    const payload={name:form.name,description:form.description,frequency:form.frequency,user_id:data.profile.id};
-    const req=initial?supabase.from("habits").update(payload).eq("id",initial.id):supabase.from("habits").insert(payload);
-    const {error}=await req;
-    if(error) alert(error.message);else{close();refresh();}
-    setBusy(false);
+    try {
+      const payload={name:form.name,description:form.description,frequency:form.frequency,user_id:userId};
+      const req=initial?supabase.from("habits").update(payload).eq("id",initial.id):supabase.from("habits").insert(payload);
+      const {error}=await req;
+      if(error) throw error;
+      close();
+      refresh();
+    } catch(error) {
+      alert(error?.message || "Could not save the habit. Check your Supabase connection and try again.");
+    } finally {
+      setBusy(false);
+    }
   }
   async function remove(){if(!initial||!confirm("Delete this habit and its logs?"))return;await supabase.from("habits").delete().eq("id",initial.id);close();refresh();}
   return <Modal title={initial?"Edit habit":"Create a habit"} close={close}><form onSubmit={save} className="modal-form"><label>Habit name<input required value={form.name} onChange={e=>setForm({...form,name:e.target.value})} placeholder="Study for 45 minutes"/></label><label>Description<textarea rows="3" value={form.description} onChange={e=>setForm({...form,description:e.target.value})} placeholder="Why does this habit matter?"/></label><label>Frequency<select value={form.frequency} onChange={e=>setForm({...form,frequency:e.target.value})}><option value="daily">Daily</option><option value="weekly">Weekly</option></select></label><button className="primary full" disabled={busy}>{busy?"Saving…":initial?"Save changes":"Create habit"}</button>{initial&&<button type="button" className="danger-button full" onClick={remove}>Delete habit</button>}</form></Modal>;
