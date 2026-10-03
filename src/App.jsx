@@ -6,7 +6,7 @@ import {
   ImagePlus, Lightbulb, ListChecks, LogOut, Menu, Plus, Search, Settings,
   Share2, Sparkles, Target, Trash2, TrendingUp, X, Zap
 } from "lucide-react";
-import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, LineChart, Line } from "recharts";
+import Analytics from "./Analytics";
 import { supabase, supabaseConfigured } from "./lib/supabase";
 
 const CATEGORIES = ["Personal", "Education", "Career", "Health", "Achievement", "Travel"];
@@ -87,6 +87,53 @@ function searchScore(query, values) {
   return matches.length === terms.length
     ? matches.reduce((score, term) => score + (words.some(word => word.startsWith(term)) ? 2 : 1), 0)
     : 0;
+}
+
+function parseSearchDate(query) {
+  const match = query.match(
+    /\b(\d{4})-(\d{1,2})-(\d{1,2})\b|\b(\d{1,2})[/. -](\d{1,2})(?:[/. -](\d{2,4}))?\b|\b(\d{1,2})\s+([a-z]{3,9})(?:\s+(\d{2,4}))?\b/i
+  );
+  if (!match) return null;
+
+  let day;
+  let month;
+  let year;
+  if (match[1]) {
+    year = Number(match[1]);
+    month = Number(match[2]);
+    day = Number(match[3]);
+  } else if (match[4]) {
+    day = Number(match[4]);
+    month = Number(match[5]);
+    year = match[6] ? Number(match[6]) : null;
+  } else {
+    day = Number(match[7]);
+    const monthText = match[8].toLowerCase();
+    month = ["january","february","march","april","may","june","july","august","september","october","november","december"]
+      .findIndex(name => name.startsWith(monthText.slice(0, 3))) + 1;
+    year = match[9] ? Number(match[9]) : null;
+  }
+  if (!month || month > 12 || day < 1 || day > 31) return null;
+  if (year !== null && year < 100) year += year < 50 ? 2000 : 1900;
+  const validationYear=year??2000;
+  const validationDate=new Date(validationYear,month-1,day);
+  if(validationDate.getFullYear()!==validationYear||validationDate.getMonth()!==month-1||validationDate.getDate()!==day)return null;
+
+  return {
+    day, month, year,
+    remainder: query.replace(match[0], " ").replace(/\s+/g, " ").trim()
+  };
+}
+
+function matchesSearchDate(value, searchDate) {
+  const [year, month, day] = value.slice(0, 10).split("-").map(Number);
+  return day === searchDate.day && month === searchDate.month
+    && (searchDate.year === null || year === searchDate.year);
+}
+
+function dateSearchValue(searchDate) {
+  const year=searchDate.year??new Date().getFullYear();
+  return `${year}-${String(searchDate.month).padStart(2, "0")}-${String(searchDate.day).padStart(2, "0")}`;
 }
 
 async function loadUserData(userId) {
@@ -256,9 +303,11 @@ function AuthenticatedApp({ session }) {
           <GlobalSearch data={data}/>
           <div className="top-actions">
             <span className="date-chip"><CalendarDays size={15}/> {new Date().toLocaleDateString(undefined,{month:"short",day:"numeric"})}</span>
-            {data.profile?.avatar_url
-              ? <img className="avatar avatar-image" src={data.profile.avatar_url} alt="Profile"/>
-              : <div className="avatar">{(data.profile?.full_name || session.user.email || "U")[0].toUpperCase()}</div>}
+            <button className="header-profile-button" onClick={()=>navigate("/explore")} aria-label="Explore people">
+              {data.profile?.avatar_url
+                ? <img className="avatar avatar-image" src={data.profile.avatar_url} alt="Explore people"/>
+                : <span className="avatar">{(data.profile?.full_name || session.user.email || "U")[0].toUpperCase()}</span>}
+            </button>
           </div>
         </header>
         <main className="content">
@@ -267,6 +316,7 @@ function AuthenticatedApp({ session }) {
             <Route path="/timeline" element={<Timeline data={data} userId={session.user.id} refresh={refresh}/>}/>
             <Route path="/habits" element={<Habits data={data} userId={session.user.id} refresh={refresh}/>}/>
             <Route path="/analytics" element={<Analytics data={data}/>}/>
+            <Route path="/explore" element={<Explore userId={session.user.id}/>}/>
             <Route path="/insights" element={<Insights data={data}/>}/>
             <Route path="/reports" element={<Reports data={data}/>}/>
             <Route path="/profile" element={<Profile data={data} refresh={refresh} session={session}/>}/>
@@ -282,20 +332,40 @@ function GlobalSearch({data}) {
   const navigate=useNavigate();
   const [query,setQuery]=useState("");
   const search=query.trim();
-  const memories=data.memories.map(memory=>({
+  const dateSearch=parseSearchDate(search);
+  const textQuery=dateSearch?dateSearch.remainder:search;
+  const datedLogs=dateSearch?data.logs.filter(log=>matchesSearchDate(log.log_date,dateSearch)):[];
+  const datedHabitIds=new Set(datedLogs.map(log=>log.habit_id));
+  const memoryResults=data.memories.filter(memory=>dateSearch
+    ?matchesSearchDate(memory.memory_date,dateSearch)
+    :true).map(memory=>({
     type:"Memory",
     title:memory.title,
     detail:[memory.category,formatDate(memory.memory_date),memory.description].filter(Boolean).join(" · "),
-    target:`/timeline?q=${encodeURIComponent(memory.title)}`,
-    score:searchScore(search,[memory.title,memory.description||"",memory.category,(memory.tags||[]).join(" ")])
+    target:dateSearch
+      ?`/timeline?date=${encodeURIComponent(memory.memory_date)}`
+      :`/timeline?q=${encodeURIComponent(memory.title)}`,
+    score:dateSearch
+      ?(textQuery?searchScore(textQuery,[memory.title,memory.description||"",memory.category,(memory.tags||[]).join(" ")]):1)
+      :searchScore(textQuery,[memory.title,memory.description||"",memory.category,(memory.tags||[]).join(" ")])
   })).filter(result=>result.score).sort((a,b)=>b.score-a.score).slice(0,5);
-  const habits=data.habits.map(habit=>({
+  const habitResults=data.habits.filter(habit=>dateSearch
+    ?datedHabitIds.has(habit.id)||(habit.frequency==="daily"&&habit.created_at?.slice(0,10)<=dateSearchValue(dateSearch))
+    :true).map(habit=>({
     type:"Habit",
     title:habit.name,
-    detail:[habit.frequency,habit.description].filter(Boolean).join(" · "),
-    target:`/habits?q=${encodeURIComponent(habit.name)}`,
-    score:searchScore(search,[habit.name,habit.description||"",habit.frequency])
+    detail:dateSearch
+      ?`${habit.frequency} · ${formatDate(datedLogs.find(log=>log.habit_id===habit.id)?.log_date||dateSearchValue(dateSearch))}`
+      :[habit.frequency,habit.description].filter(Boolean).join(" · "),
+    target:dateSearch
+      ?`/habits?date=${encodeURIComponent(datedLogs.find(log=>log.habit_id===habit.id)?.log_date||dateSearchValue(dateSearch))}`
+      :`/habits?q=${encodeURIComponent(habit.name)}`,
+    score:dateSearch
+      ?(textQuery?searchScore(textQuery,[habit.name,habit.description||"",habit.frequency]):1)
+      :searchScore(textQuery,[habit.name,habit.description||"",habit.frequency])
   })).filter(result=>result.score).sort((a,b)=>b.score-a.score).slice(0,5);
+  const memories=memoryResults;
+  const habits=habitResults;
   const results=[...memories,...habits];
 
   function openResult(target) {
@@ -308,7 +378,7 @@ function GlobalSearch({data}) {
       value={query}
       onChange={event=>setQuery(event.target.value)}
       onKeyDown={event=>{if(event.key==="Escape")setQuery("");if(event.key==="Enter"&&results[0])openResult(results[0].target)}}
-      placeholder="Search habits and memories…"
+      placeholder="Search habits and memories by name or date…"
       aria-label="Search habits and memories"
       aria-expanded={Boolean(search)}
       aria-controls="global-search-results"
@@ -319,9 +389,87 @@ function GlobalSearch({data}) {
         {memories.map((result,index)=><button key={`memory-${index}`} className="search-result" role="option" aria-selected="false" onClick={()=>openResult(result.target)}><span className="search-result-icon"><BookOpen size={16}/></span><span className="search-result-copy"><strong>{result.title}</strong><small>{result.detail}</small></span></button>)}
         {habits.length>0&&<div className="search-group-label">HABITS</div>}
         {habits.map((result,index)=><button key={`habit-${index}`} className="search-result" role="option" aria-selected="false" onClick={()=>openResult(result.target)}><span className="search-result-icon"><ListChecks size={16}/></span><span className="search-result-copy"><strong>{result.title}</strong><small>{result.detail}</small></span></button>)}
-      </>:<div className="search-empty">No habits or memories match “{search}”.</div>}
+      </>:<div className="search-empty">No habits or memories match “{search}”. Try 2 Oct, 2 October 2026, or 2/10/26.</div>}
     </div>}
   </div>;
+}
+
+function Explore({userId}) {
+  const [query,setQuery]=useState("");
+  const [people,setPeople]=useState([]);
+  const [selected,setSelected]=useState(null);
+  const [habits,setHabits]=useState([]);
+  const [searching,setSearching]=useState(false);
+  const [loadingProgress,setLoadingProgress]=useState(false);
+  const [error,setError]=useState("");
+
+  async function searchPeople(event) {
+    event.preventDefault();
+    const name=query.trim();
+    if(!name)return;
+    setSearching(true);
+    setSelected(null);
+    setHabits([]);
+    setError("");
+    try {
+      const {data,error:searchError}=await supabase.rpc("search_explore_profiles",{search_name:name});
+      if(searchError)throw searchError;
+      setPeople(data||[]);
+    } catch(requestError) {
+      setError(requestError?.message||"Could not search for people.");
+      setPeople([]);
+    } finally {
+      setSearching(false);
+    }
+  }
+
+  async function openPerson(person) {
+    setSelected(person);
+    setHabits([]);
+    setLoadingProgress(true);
+    setError("");
+    try {
+      const {data,error:progressError}=await supabase.rpc("get_explore_habit_summary",{target_user_id:person.id});
+      if(progressError)throw progressError;
+      setHabits(data||[]);
+    } catch(requestError) {
+      setError(requestError?.message||"Could not load this person's public habit progress.");
+    } finally {
+      setLoadingProgress(false);
+    }
+  }
+
+  const weeklyDone=habits.reduce((total,habit)=>total+Number(habit.completed_this_week||0),0);
+  const weeklyGoal=habits.reduce((total,habit)=>total+Number(habit.week_goal||0),0);
+  const weeklyRate=weeklyGoal?Math.round(weeklyDone/weeklyGoal*100):0;
+  const todayDone=habits.filter(habit=>habit.completed_today).length;
+
+  return <>
+    <PageHeader eyebrow="COMMUNITY" title={selected?selected.full_name:"Explore"} description={selected?"Only today's habit check-ins and this week's progress are shown.":"Find people by name and get inspired by their habit progress."} action={selected&&<button className="secondary" onClick={()=>{setSelected(null);setError("");}}><ChevronRight size={15} className="back-chevron"/> Back to search</button>}/>
+    {!selected&&<section className="panel explore-search-panel">
+      <form className="explore-search-form" onSubmit={searchPeople}>
+        <label htmlFor="explore-name">Search people by name</label>
+        <div className="explore-search-input"><Search size={18}/><input id="explore-name" value={query} onChange={event=>{setQuery(event.target.value);setPeople([]);}} placeholder="Enter a name…" autoComplete="off"/><button className="primary" type="submit" disabled={searching||!query.trim()}>{searching?"Searching…":"Search"}</button></div>
+      </form>
+      {error&&<div className="notice" role="alert">{error}</div>}
+      {people.length>0&&<div className="explore-results" aria-label="People search results">
+        {people.map(person=><button className="explore-person" key={person.id} onClick={()=>openPerson(person)}><span className="avatar">{(person.full_name||"U")[0].toUpperCase()}</span><span><strong>{person.full_name}</strong><small>View today's habits and weekly progress</small></span><ChevronRight size={17}/></button>)}
+      </div>}
+      {!searching&&!error&&query.trim()&&people.length===0&&<p className="explore-empty">No profiles found for “{query.trim()}”.</p>}
+    </section>}
+    {selected&&<section className="panel explore-progress-panel">
+      {error&&<div className="notice" role="alert">{error}</div>}
+      {loadingProgress?<div className="explore-empty">Loading public habit progress…</div>:error?null:<>
+        <div className="explore-metrics">
+          <div><span>Today's habits</span><strong>{todayDone}<small> / {habits.length} completed</small></strong></div>
+          <div><span>This week's progress</span><strong>{weeklyRate}%</strong><small>{weeklyDone} of {weeklyGoal} scheduled check-ins</small></div>
+        </div>
+        <div className="explore-week-progress" role="progressbar" aria-valuenow={weeklyRate} aria-valuemin="0" aria-valuemax="100" aria-label="Weekly habit progress"><span style={{width:`${weeklyRate}%`}}/></div>
+        <div className="explore-habit-heading"><h2>Today's habits</h2><span>{new Date().toLocaleDateString(undefined,{weekday:"long",month:"long",day:"numeric"})}</span></div>
+        {habits.length?<div className="explore-habit-list">{habits.map(habit=><div className="explore-habit" key={habit.habit_id}><span className={`explore-habit-check${habit.completed_today?" completed":""}`}>{habit.completed_today?<Check size={15}/>:<CircleUserRound size={14}/>}</span><strong>{habit.habit_name}</strong><span className={`explore-habit-status${habit.completed_today?" completed":""}`}>{habit.completed_today?"Completed today":"Not checked in"}</span></div>)}</div>:<p className="explore-empty">No active habits to show yet.</p>}
+      </>}
+    </section>}
+  </>;
 }
 
 function Sidebar({ page, mobile, close, signOut, shareWebsite }) {
@@ -403,18 +551,21 @@ function LinkButton({to}) {
 
 function Timeline({data,userId,refresh}) {
   const location=useLocation();
+  const navigate=useNavigate();
   const [open,setOpen]=useState(false);
   const [editing,setEditing]=useState(null);
   const [query,setQuery]=useState(()=>new URLSearchParams(location.search).get("q")||"");
   const [category,setCategory]=useState("All");
   useEffect(()=>{setQuery(new URLSearchParams(location.search).get("q")||"");},[location.search]);
+  const dateFilter=new URLSearchParams(location.search).get("date")||"";
   const filtered=data.memories.filter(m=>{
     const text=`${m.title} ${m.description||""} ${(m.tags||[]).join(" ")}`.toLowerCase();
-    return text.includes(query.toLowerCase()) && (category==="All"||m.category===category);
+    return text.includes(query.toLowerCase()) && (!dateFilter||m.memory_date===dateFilter) && (category==="All"||m.category===category);
   });
   return <>
     <PageHeader eyebrow="PERSONAL LIFE TIMELINE" title="Your story, one moment at a time." description="Capture memories with enough context to make them meaningful later." action={<button className="primary" onClick={()=>{setEditing(null);setOpen(true)}}><Plus size={17}/> Add memory</button>}/>
     <div className="toolbar"><div className="search-field"><Search size={17}/><input value={query} onChange={e=>setQuery(e.target.value)} placeholder="Search memories…"/></div><select value={category} onChange={e=>setCategory(e.target.value)}><option>All</option>{CATEGORIES.map(c=><option key={c}>{c}</option>)}</select></div>
+    {dateFilter&&<div className="date-filter-banner"><span>Memories from {formatDate(dateFilter)}</span><button className="link-button" onClick={()=>navigate("/timeline")}>Clear date filter <X size={14}/></button></div>}
     <section className="panel timeline-panel">
       {filtered.length ? filtered.map((m,i)=><MemoryCard key={m.id} memory={m} last={i===filtered.length-1} edit={()=>{setEditing(m);setOpen(true)}} refresh={refresh}/>) : <EmptyState icon={CalendarDays} title="Nothing here yet" text={query?"Try another search.":"Add a meaningful moment to begin your timeline."}/>}
     </section>
@@ -454,6 +605,7 @@ function MemoryModal({initial,userId,close,refresh}) {
 
 function Habits({data,userId,refresh}) {
   const location=useLocation();
+  const navigate=useNavigate();
   const [open,setOpen]=useState(false);
   const [editing,setEditing]=useState(null);
   const [query,setQuery]=useState(()=>new URLSearchParams(location.search).get("q")||"");
@@ -461,8 +613,25 @@ function Habits({data,userId,refresh}) {
   const [pushMessage,setPushMessage]=useState("");
   useEffect(()=>{setQuery(new URLSearchParams(location.search).get("q")||"");},[location.search]);
   const today=isoDate(new Date());
+  const historyDate=new URLSearchParams(location.search).get("date")||"";
+  const selectedDate=historyDate||today;
+  const historyLogs=data.logs.filter(log=>log.log_date===selectedDate);
   const completedToday=data.logs.filter(l=>l.log_date===today&&l.completed).map(l=>l.habit_id);
-  const filteredHabits=data.habits.filter(habit=>!query.trim()||searchScore(query,[habit.name,habit.description||"",habit.frequency])>0);
+  const filteredHabits=data.habits.filter(habit=>{
+    const matchesQuery=!query.trim()||searchScore(query,[habit.name,habit.description||"",habit.frequency])>0;
+    if(!matchesQuery)return false;
+    if(!historyDate)return true;
+    const created=habit.created_at?.slice(0,10);
+    const logged=historyLogs.some(log=>log.habit_id===habit.id);
+    const weekday=new Date(`${selectedDate}T00:00:00`).getDay()||7;
+    const weeklyDue=habit.frequency==="weekly"&&habit.reminder_weekday===weekday;
+    return (!created||created<=selectedDate)&&(logged||habit.frequency==="daily"||weeklyDue);
+  });
+  function statusForDate(habit) {
+    if(historyLogs.some(log=>log.habit_id===habit.id&&log.completed))return "Completed";
+    if(historyLogs.some(log=>log.habit_id===habit.id&&!log.completed))return "Missed";
+    return selectedDate<today&&habit.frequency==="daily"?"Missed":"Not checked in";
+  }
   async function enablePushReminders() {
     setPushBusy(true);
     setPushMessage("");
@@ -502,21 +671,21 @@ function Habits({data,userId,refresh}) {
     refresh();
   }
   return <>
-    <PageHeader eyebrow="HABIT TRACKER" title="Small actions become visible progress." description="Keep the promises you make to yourself, one day at a time." action={<button className="primary" onClick={()=>{setEditing(null);setOpen(true)}}><Plus size={17}/> New habit</button>}/>
+    <PageHeader eyebrow={historyDate?"HABIT HISTORY":"HABIT TRACKER"} title={historyDate?`Habits on ${formatDate(historyDate)}`:"Small actions become visible progress."} description={historyDate?"A read-only view of your habits for this date.":"Keep the promises you make to yourself, one day at a time."} action={historyDate?<button className="secondary" onClick={()=>navigate("/habits")}>Return to today</button>:<button className="primary" onClick={()=>{setEditing(null);setOpen(true)}}><Plus size={17}/> New habit</button>}/>
     <div className="habit-summary"><Stat icon={Flame} label="Overall streak" value={`${calculateOverallStreak(data.habits,data.logs)} days`} hint="based on tracked activity"/><Stat icon={Check} label="Today" value={`${completedToday.length}/${data.habits.length}`} hint="habits completed"/><Stat icon={Target} label="This month" value={`${monthlyCompletion(data.habits,data.logs)}%`} hint="completion rate"/></div>
-    <section className="panel"><div className="panel-head"><div><h3>Today's habits</h3><p>Tap a habit when you've completed it.</p></div><button className="secondary" type="button" onClick={enablePushReminders} disabled={pushBusy}><Bell size={16}/>{pushBusy?"Enabling…":"Enable reminders"}</button></div>{pushMessage&&<div className="notice push-notice" role="status">{pushMessage}</div>}<div className="search-field habit-search"><Search size={17}/><input value={query} onChange={e=>setQuery(e.target.value)} placeholder="Filter habits…"/></div>{filteredHabits.length?<div className="habit-list">{filteredHabits.map(h=><HabitCheck key={h.id} habit={h} completed={completedToday.includes(h.id)} onToggle={()=>toggle(h)} edit={()=>{setEditing(h);setOpen(true)}} refresh={refresh}/>)}</div>:<EmptyState icon={ListChecks} title={data.habits.length?"No habits match":"Build your first habit"} text={data.habits.length?"Try a shorter or different keyword.":"Start with something small and repeatable."}/>}</section>
+    <section className="panel"><div className="panel-head"><div><h3>{historyDate?"Habit check-ins":"Today's habits"}</h3><p>{historyDate?"Historical check-ins are read-only.":"Tap a habit when you've completed it."}</p></div>{!historyDate&&<button className="secondary" type="button" onClick={enablePushReminders} disabled={pushBusy}><Bell size={16}/>{pushBusy?"Enabling…":"Enable reminders"}</button>}</div>{pushMessage&&<div className="notice push-notice" role="status">{pushMessage}</div>}<div className="search-field habit-search"><Search size={17}/><input value={query} onChange={e=>setQuery(e.target.value)} placeholder="Filter habits…"/></div>{filteredHabits.length?<div className="habit-list">{filteredHabits.map(h=><HabitCheck key={h.id} habit={h} completed={historyDate?historyLogs.some(log=>log.habit_id===h.id&&log.completed):completedToday.includes(h.id)} statusLabel={historyDate?statusForDate(h):""} readonly={Boolean(historyDate)} onToggle={()=>toggle(h)} edit={()=>{setEditing(h);setOpen(true)}} refresh={refresh}/>)}</div>:<EmptyState icon={ListChecks} title={data.habits.length?"No habits match":"Build your first habit"} text={data.habits.length?"Try a shorter or different keyword.":"Start with something small and repeatable."}/>}</section>
     {open&&<HabitModal initial={editing} userId={userId} close={()=>setOpen(false)} refresh={refresh}/>}
   </>;
 }
 
-function HabitCheck({habit,completed,onToggle,edit,refresh,readonly}) {
+function HabitCheck({habit,completed,onToggle,edit,refresh,readonly,statusLabel}) {
   const streak=calculateHabitStreak(habit.id, []);
   const weekdays=["","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
   const reminder=habit.reminder_time
     ? `Reminder ${habit.reminder_time.slice(0,5)}${habit.frequency==="weekly"&&habit.reminder_weekday?` · ${weekdays[habit.reminder_weekday]}`:""}`
     : "";
-  const detail=[habit.description||`${habit.frequency} habit`,reminder].filter(Boolean).join(" · ");
-  return <div className={`habit-row ${completed?"done":""}`}><button className="check-btn" onClick={onToggle} disabled={readonly}>{completed&&<Check size={17}/>}</button><div className="habit-info"><strong>{habit.name}</strong><span>{detail}</span></div><div className="habit-meta"><span className="streak"><Flame size={14}/> {streak||0}</span>{!readonly&&<button className="icon-btn" onClick={edit}><Settings size={15}/></button>}</div></div>;
+  const detail=[habit.description||`${habit.frequency} habit`,reminder,statusLabel].filter(Boolean).join(" · ");
+  return <div className={`habit-row ${completed?"done":""} ${statusLabel==="Missed"?"history-missed":""}`}><button className="check-btn" onClick={onToggle} disabled={readonly}>{completed&&<Check size={17}/>}</button><div className="habit-info"><strong>{habit.name}</strong><span>{detail}</span></div><div className="habit-meta"><span className="streak"><Flame size={14}/> {streak||0}</span>{!readonly&&<button className="icon-btn" onClick={edit}><Settings size={15}/></button>}</div></div>;
 }
 
 function HabitModal({initial,userId,close,refresh}) {
@@ -548,22 +717,6 @@ function HabitModal({initial,userId,close,refresh}) {
   async function remove(){if(!initial||!confirm("Delete this habit and its logs?"))return;await supabase.from("habits").delete().eq("id",initial.id);close();refresh();}
   return <Modal title={initial?"Edit habit":"Create a habit"} close={close}><form onSubmit={save} className="modal-form"><label>Habit name<input required value={form.name} onChange={e=>setForm({...form,name:e.target.value})} placeholder="Study for 45 minutes"/></label><label>Description<textarea rows="3" value={form.description} onChange={e=>setForm({...form,description:e.target.value})} placeholder="Why does this habit matter?"/></label><label>Frequency<select value={form.frequency} onChange={e=>setForm({...form,frequency:e.target.value})}><option value="daily">Daily</option><option value="weekly">Weekly</option></select></label><label>Reminder time <span className="field-hint">Optional · uses your local timezone</span><input type="time" value={form.reminder_time} onChange={e=>setForm({...form,reminder_time:e.target.value})}/></label>{form.frequency==="weekly"&&form.reminder_time&&<label>Remind me every<select value={form.reminder_weekday} onChange={e=>setForm({...form,reminder_weekday:e.target.value})}><option value="1">Monday</option><option value="2">Tuesday</option><option value="3">Wednesday</option><option value="4">Thursday</option><option value="5">Friday</option><option value="6">Saturday</option><option value="7">Sunday</option></select></label>}<button className="primary full" disabled={busy}>{busy?"Saving…":initial?"Save changes":"Create habit"}</button>{initial&&<button type="button" className="danger-button full" onClick={remove}>Delete habit</button>}</form></Modal>;
 }
-
-function Analytics({data}) {
-  const daily=Array.from({length:7},(_,i)=>{const date=daysAgo(6-i);return {day:new Date(`${date}T00:00:00`).toLocaleDateString(undefined,{weekday:"short"}),completed:data.logs.filter(l=>l.log_date===date&&l.completed).length};});
-  const category= CATEGORIES.map(c=>({name:c,value:data.memories.filter(m=>m.category===c).length})).filter(x=>x.value);
-  const rate=monthlyCompletion(data.habits,data.logs);
-  return <>
-    <PageHeader eyebrow="PROGRESS ANALYTICS" title="See your progress, not just your activity." description="Simple visual signals that help you understand your journey."/>
-    <div className="stat-grid"><Stat icon={TrendingUp} label="Monthly completion" value={`${rate}%`} hint="habit completion"/><Stat icon={BookOpen} label="Moments captured" value={data.memories.length} hint="all-time"/><Stat icon={Flame} label="Longest current streak" value={`${calculateOverallStreak(data.habits,data.logs)}d`} hint="tracked habits"/></div>
-    <div className="chart-grid">
-      <section className="panel chart-panel"><div className="panel-head"><div><h3>Last 7 days</h3><p>Completed habit check-ins</p></div></div><div className="chart"><ResponsiveContainer width="100%" height="100%"><BarChart data={daily}><CartesianGrid vertical={false} stroke="rgba(255,255,255,.07)"/><XAxis dataKey="day" axisLine={false} tickLine={false}/><YAxis allowDecimals={false} axisLine={false} tickLine={false}/><Tooltip contentStyle={tooltipStyle}/><Bar dataKey="completed" radius={[6,6,0,0]} fill="currentColor"/></BarChart></ResponsiveContainer></div></section>
-      <section className="panel chart-panel"><div className="panel-head"><div><h3>Memories by category</h3><p>What your story contains</p></div></div><div className="chart"><ResponsiveContainer width="100%" height="100%"><LineChart data={category.length?category:[{name:"No data",value:0}]}><CartesianGrid vertical={false} stroke="rgba(255,255,255,.07)"/><XAxis dataKey="name" axisLine={false} tickLine={false}/><YAxis allowDecimals={false} axisLine={false} tickLine={false}/><Tooltip contentStyle={tooltipStyle}/><Line type="monotone" dataKey="value" stroke="currentColor" strokeWidth={3} dot={{r:4}}/></LineChart></ResponsiveContainer></div></section>
-    </div>
-  </>;
-}
-const tooltipStyle={background:"#111827",border:"1px solid rgba(255,255,255,.12)",borderRadius:12,color:"#fff"};
-
 
 function Insights({data}) {
   const insights=buildInsights(data);

@@ -20,6 +20,8 @@ LifeProof is a personal evidence-and-growth dashboard based on the supplied CODE
 - Rule-based personal insights
 - Life–habit connection
 - Search/filter timeline
+- Search memories and habit check-ins by name or date
+- Explore other members' names, today's habit check-ins, and current-week progress
 - GitHub-safe `.env.example`
 - Supabase SQL schema with Row Level Security
 
@@ -43,6 +45,12 @@ npm run dev
 ```
 
 8. Open the local URL shown by Vite.
+
+## Explore other members
+
+The profile button in the app header opens Explore. Signed-in users can search for another member by name and view only that member's active habit names, today's check-in status, and current-week completion summary. Memories, profile email addresses, and other history are not returned by the Explore endpoints.
+
+Run `supabase/schema.sql` for a new project. If the project already has the LifeProof schema, run `supabase/explore.sql` once in the Supabase SQL Editor to install the authenticated, read-only Explore RPCs. These functions return only the fields used by Explore and do not relax the existing row-level policies on habits or habit logs.
 
 ## Habit push reminders
 
